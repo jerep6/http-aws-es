@@ -2,17 +2,29 @@ Connection handler for Amazon ES
 ---
 
 Makes elasticsearch-js compatible with Amazon ES. It uses the aws-sdk to make signed requests to an Amazon ES endpoint.
+
+The configuration for signing the request can be explicitly provided.  Otherwise, it will be extracted from the `aws-sdk` configuration.
+
+Use the `aws-sdk` configuration:
+```javascript
+var es = require('elasticsearch').Client({
+  hosts: 'https://amazon-es-host.us-east-1.es.amazonaws.com',
+  connectionClass: require('http-aws-es')(AWS),
+});
+```
+
 Define the Amazon ES config and the connection handler
 in the client configuration:
 
 ```javascript
 var es = require('elasticsearch').Client({
   hosts: 'https://amazon-es-host.us-east-1.es.amazonaws.com',
-  connectionClass: require('http-aws-es'),
+  connectionClass: require('http-aws-es')(AWS),
   amazonES: {
     region: 'us-east-1',
     accessKey: 'AKID',
-    secretKey: 'secret'
+    secretKey: 'secret',
+    httpOptions: myHttpOptions
   }
 });
 ```
@@ -24,10 +36,11 @@ This is particularly useful if running on AWS Lambda, since the appropriate cred
 var myCredentials = new AWS.EnvironmentCredentials('AWS'); // Lambda provided credentials
 var es = require('elasticsearch').Client({
   hosts: 'https://amazon-es-host.us-east-1.es.amazonaws.com',
-  connectionClass: require('http-aws-es'),
+  connectionClass: require('http-aws-es')(AWS),,
   amazonES: {
-    region: "us-east-1",
-    credentials: myCredentials
+    region: 'us-east-1',
+    credentials: myCredentials,
+    httpOptions: myHttpOptions
   }
 });
 ```
