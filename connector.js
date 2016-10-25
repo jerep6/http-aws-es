@@ -164,4 +164,9 @@ module.exports = function (AWS) {
 
     return HttpAmazonESConnector;
   })(HttpConnector);
+<<<<<<< HEAD
 };
+=======
+};
+
+>>>>>>> c54352a... remove connector.js from gitignore to use directly from github
