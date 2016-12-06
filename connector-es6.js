@@ -45,13 +45,18 @@ module.exports = function (AWS) {
       }
     }
     getCredentials(amazonES) {
-      if (amazonES && amazonES.credentials) {
-        return amazonES.credentials;
-      } else if(amazonES && amazonES.accessKey && amazonES.secretKey) {
-        return new AWS.Credentials(amazonES.accessKey, amazonES.secretKey);
-      } else {
-        return AWS.config.credentials;
-      }
+      return new Promise((resolve, reject) => {
+        if (amazonES && amazonES.credentials) {
+          resolve(amazonES.credentials);
+        } else if(amazonES && amazonES.accessKey && amazonES.secretKey) {
+          resolve(new AWS.Credentials(amazonES.accessKey, amazonES.secretKey));
+        } else {
+          AWS.config.getCredentials((err, cred) => {
+            if(err) reject(err);
+            else resolve(cred);
+          });
+        }
+      });
     }
     getHttpOptions(amazonES) {
       if(amazonES && amazonES.httpOptions) {
@@ -62,82 +67,84 @@ module.exports = function (AWS) {
     }
 
     request(params, cb) {
-      var incoming;
-      var timeoutId;
-      var request;
-      var req;
-      var status = 0;
-      var headers = {};
-      var log = this.log;
-      var response;
+      return this.creds.then(creds => {
+        var incoming;
+        var timeoutId;
+        var request;
+        var req;
+        var status = 0;
+        var headers = {};
+        var log = this.log;
+        var response;
 
-      var reqParams = this.makeReqParams(params);
-      // general clean-up procedure to run after the request
-      // completes, has an error, or is aborted.
-      var cleanUp = _.bind(function (err) {
-        clearTimeout(timeoutId);
+        var reqParams = this.makeReqParams(params);
+        // general clean-up procedure to run after the request
+        // completes, has an error, or is aborted.
+        var cleanUp = _.bind(function (err) {
+          clearTimeout(timeoutId);
 
-        req && req.removeAllListeners();
-        incoming && incoming.removeAllListeners();
+          req && req.removeAllListeners();
+          incoming && incoming.removeAllListeners();
 
-        if ((err instanceof Error) === false) {
-          err = void 0;
+          if ((err instanceof Error) === false) {
+            err = void 0;
+          }
+
+          log.trace(params.method, reqParams, params.body, response, status);
+          if (err) {
+            cb(err);
+          } else {
+            cb(err, response, status, headers);
+          }
+        }, this);
+
+        request = new AWS.HttpRequest(this.endpoint);
+
+        // copy across params
+        for (let p in reqParams) {
+          request[p] = reqParams[p];
         }
 
-        log.trace(params.method, reqParams, params.body, response, status);
-        if (err) {
-          cb(err);
-        } else {
-          cb(err, response, status, headers);
-        }
-      }, this);
+        request.region = this.region;
+        if (params.body) request.body = params.body;
+        if (!request.headers) request.headers = {};
+        request.headers['presigned-expires'] = false;
+        request.headers['Host'] = this.endpoint.host;
 
-      request = new AWS.HttpRequest(this.endpoint);
+        // Sign the request (Sigv4)
+        var signer = new AWS.Signers.V4(request, 'es');
+        signer.addAuthorization(creds, new Date());
 
-      // copy across params
-      for (let p in reqParams) {
-        request[p] = reqParams[p];
-      }
+        var send = new AWS.NodeHttpClient();
+        req = send.handleRequest(request, this.httpOptions, function (_incoming) {
+          incoming = _incoming;
+          status = incoming.statusCode;
+          headers = incoming.headers;
+          response = '';
 
-      request.region = this.region;
-      if (params.body) request.body = params.body;
-      if (!request.headers) request.headers = {};
-      request.headers['presigned-expires'] = false;
-      request.headers['Host'] = this.endpoint.host;
+          var encoding = (headers['content-encoding'] || '').toLowerCase();
+          if (encoding === 'gzip' || encoding === 'deflate') {
+            incoming = incoming.pipe(zlib.createUnzip());
+          }
 
-      // Sign the request (Sigv4)
-      var signer = new AWS.Signers.V4(request, 'es');
-      signer.addAuthorization(this.creds, new Date());
+          incoming.setEncoding('utf8');
+          incoming.on('data', function (d) {
+            response += d;
+          });
 
-      var send = new AWS.NodeHttpClient();
-      req = send.handleRequest(request, this.httpOptions, function (_incoming) {
-        incoming = _incoming;
-        status = incoming.statusCode;
-        headers = incoming.headers;
-        response = '';
+          incoming.on('error', cleanUp);
+          incoming.on('end', cleanUp);
+        }, cleanUp);
 
-        var encoding = (headers['content-encoding'] || '').toLowerCase();
-        if (encoding === 'gzip' || encoding === 'deflate') {
-          incoming = incoming.pipe(zlib.createUnzip());
-        }
+        req.on('error', cleanUp);
 
-        incoming.setEncoding('utf8');
-        incoming.on('data', function (d) {
-          response += d;
-        });
+        req.setNoDelay(true);
+        req.setSocketKeepAlive(true);
 
-        incoming.on('error', cleanUp);
-        incoming.on('end', cleanUp);
-      }, cleanUp);
-
-      req.on('error', cleanUp);
-
-      req.setNoDelay(true);
-      req.setSocketKeepAlive(true);
-
-      return function () {
-        req.abort();
-      };
+        return function () {
+          req.abort();
+        };
+      });
     }
   }
 }
